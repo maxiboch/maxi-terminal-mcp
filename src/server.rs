@@ -97,7 +97,7 @@ impl McpServer {
                         "properties": {
                             "command": { "type": "string" },
                             "background": { "type": "boolean", "default": false },
-                            "shell": { "type": "string", "enum": ["bash", "zsh", "fish", "powershell_core", "powershell", "cmd", "sh", "nushell"] },
+                            "shell": { "type": "string", "enum": ["bash", "zsh", "fish", "powershell_core", "powershell", "cmd", "sh", "nushell", "wsl"] },
                             "cwd": { "type": "string" },
                             "env": { "type": "object" },
                             "timeout_ms": { "type": "integer" },
@@ -133,7 +133,7 @@ impl McpServer {
                             "action": { "type": "string", "enum": ["create", "run", "destroy", "list"] },
                             "session_id": { "type": "string", "description": "Required for run/destroy" },
                             "command": { "type": "string", "description": "Required for run" },
-                            "shell": { "type": "string", "enum": ["bash", "zsh", "fish", "powershell_core", "powershell", "cmd", "sh", "nushell"] },
+                            "shell": { "type": "string", "enum": ["bash", "zsh", "fish", "powershell_core", "powershell", "cmd", "sh", "nushell", "wsl"] },
                             "cwd": { "type": "string" },
                             "env": { "type": "object" },
                             "timeout_ms": { "type": "integer" },

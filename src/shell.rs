@@ -16,6 +16,7 @@ pub enum Shell {
     Cmd,
     Sh,
     Nushell,
+    Wsl,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -43,6 +44,7 @@ impl Shell {
             Shell::Cmd => "cmd",
             Shell::Sh => "sh",
             Shell::Nushell => "nu",
+            Shell::Wsl => "wsl",
         }
     }
 
@@ -60,6 +62,12 @@ impl Shell {
                 ]
             }
             Shell::Cmd => vec!["/C".to_string(), cmd.to_string()],
+            Shell::Wsl => vec![
+                "--".to_string(),
+                "bash".to_string(),
+                "-c".to_string(),
+                cmd.to_string(),
+            ],
         }
     }
 
@@ -73,6 +81,7 @@ impl Shell {
             Shell::Cmd,
             Shell::Sh,
             Shell::Nushell,
+            Shell::Wsl,
         ]
     }
 
@@ -184,7 +193,12 @@ pub fn detect_default_shell() -> Option<(Shell, PathBuf)> {
     }
 
     let priority: &[Shell] = if cfg!(windows) {
-        &[Shell::PowerShellCore, Shell::PowerShell, Shell::Cmd]
+        &[
+            Shell::PowerShellCore,
+            Shell::PowerShell,
+            Shell::Wsl,
+            Shell::Cmd,
+        ]
     } else {
         &[Shell::Zsh, Shell::Bash, Shell::Fish, Shell::Sh]
     };
