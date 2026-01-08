@@ -5,6 +5,9 @@ use std::io::{BufRead, Write};
 
 use crate::output::{OutputFormat, DEFAULT_MAX_BYTES};
 use crate::path_utils::normalize_path;
+use crate::process::{
+    cleanup_all_processes, register_pid, spawn_isolated, unregister_pid, SpawnConfig,
+};
 use crate::session::SessionManager;
 use crate::shell::{
     detect_available_package_managers, detect_available_shells, detect_default_shell, ensure_shell,
@@ -50,6 +53,11 @@ impl McpServer {
         }
 
         Ok(())
+    }
+
+    pub async fn shutdown(&self) {
+        self.task_manager.kill_all_running().await;
+        cleanup_all_processes().await;
     }
 
     async fn handle_request(&self, request: Value) -> Value {
@@ -222,29 +230,41 @@ impl McpServer {
             .and_then(|m| m.as_u64())
             .map(|m| m as usize);
 
-        let mut cmd = tokio::process::Command::new(&shell_path);
-        cmd.args(&shell_args)
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .stdin(std::process::Stdio::null());
-
-        if let Some(dir) = cwd {
-            cmd.current_dir(dir);
-        }
-        if let Some(vars) = env {
-            cmd.envs(vars);
-        }
+        let config = SpawnConfig {
+            program: shell_path,
+            args: shell_args,
+            cwd,
+            env,
+            new_process_group: true,
+        };
 
         let started = std::time::Instant::now();
+        let child = spawn_isolated(&config)?;
+        let pid = child.id();
+
+        if let Some(p) = pid {
+            register_pid(p).await;
+        }
+
+        let wait_future = child.wait_with_output();
 
         let output = if let Some(ms) = timeout_ms {
-            match tokio::time::timeout(tokio::time::Duration::from_millis(ms), cmd.output()).await {
+            match tokio::time::timeout(tokio::time::Duration::from_millis(ms), wait_future).await {
                 Ok(r) => r?,
-                Err(_) => return Err(anyhow!("Timeout after {}ms", ms)),
+                Err(_) => {
+                    if let Some(p) = pid {
+                        let _ = crate::process::kill_process_tree(p, true).await;
+                    }
+                    return Err(anyhow!("Timeout after {}ms", ms));
+                }
             }
         } else {
-            cmd.output().await?
+            wait_future.await?
         };
+
+        if let Some(p) = pid {
+            unregister_pid(p).await;
+        }
 
         let duration_ms = started.elapsed().as_millis() as u64;
         let stdout = crate::output::process_output(&output.stdout, format, max_output);
@@ -270,7 +290,7 @@ impl McpServer {
                 let tasks = self.task_manager.list_tasks().await;
                 let summaries: Vec<_> = tasks
                     .iter()
-                    .map(|t| json!({"id": t.id, "command": t.command, "status": t.status, "exit_code": t.exit_code, "duration_ms": t.duration_ms}))
+                    .map(|t| json!({"id": t.id, "command": t.command, "status": t.status, "exit_code": t.exit_code, "duration_ms": t.duration_ms, "pid": t.pid}))
                     .collect();
                 self.ok(&json!(summaries))
             }
@@ -284,7 +304,18 @@ impl McpServer {
                     .get_task(task_id)
                     .await
                     .ok_or_else(|| anyhow!("Task not found"))?;
-                self.ok(&json!({"status": task.status, "exit_code": task.exit_code, "duration_ms": task.duration_ms}))
+                let output_complete = self
+                    .task_manager
+                    .is_output_complete(task_id)
+                    .await
+                    .unwrap_or(true);
+                self.ok(&json!({
+                    "status": task.status,
+                    "exit_code": task.exit_code,
+                    "duration_ms": task.duration_ms,
+                    "pid": task.pid,
+                    "output_complete": output_complete
+                }))
             }
             "output" => {
                 let task_id = args
@@ -309,7 +340,12 @@ impl McpServer {
                     .await
                     .ok_or_else(|| anyhow!("Task not found"))?;
                 let processed = crate::output::process_output(&data, format, Some(limit));
-                self.ok(&json!({"output": processed.as_string_lossy(), "has_more": has_more, "total_bytes": processed.total_bytes, "truncated": processed.truncated}))
+                self.ok(&json!({
+                    "output": processed.as_string_lossy(),
+                    "has_more": has_more,
+                    "total_bytes": processed.total_bytes,
+                    "truncated": processed.truncated
+                }))
             }
             "kill" => {
                 let task_id = args

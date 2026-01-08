@@ -12,5 +12,36 @@ async fn main() -> Result<()> {
         .init();
 
     let server = McpServer::new();
-    server.run().await
+
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+        let mut sigterm = signal(SignalKind::terminate())?;
+        let mut sigint = signal(SignalKind::interrupt())?;
+
+        tokio::select! {
+            result = server.run() => result,
+            _ = sigterm.recv() => {
+                server.shutdown().await;
+                Ok(())
+            }
+            _ = sigint.recv() => {
+                server.shutdown().await;
+                Ok(())
+            }
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        use tokio::signal::ctrl_c;
+
+        tokio::select! {
+            result = server.run() => result,
+            _ = ctrl_c() => {
+                server.shutdown().await;
+                Ok(())
+            }
+        }
+    }
 }

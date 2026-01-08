@@ -5,11 +5,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
-use tokio::process::Command;
 use tokio::sync::RwLock;
 use tokio::time::{timeout, Duration};
 
 use crate::output::{process_output, OutputBuffer, OutputFormat};
+use crate::process::{register_pid, spawn_isolated, unregister_pid, SpawnConfig};
 use crate::shell::Shell;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -107,31 +107,41 @@ impl SessionManager {
         let shell_path = which::which(shell.executable_name())?;
         let args = shell.command_args(command);
 
-        let started = Instant::now();
-
-        let mut cmd = Command::new(&shell_path);
-        cmd.args(&args)
-            .current_dir(&cwd)
-            .envs(&env)
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .stdin(std::process::Stdio::null());
-
-        let child = cmd.spawn()?;
-
-        let wait_future = async {
-            let output = child.wait_with_output().await;
-            output
+        let config = SpawnConfig {
+            program: shell_path,
+            args,
+            cwd: Some(cwd),
+            env: Some(env),
+            new_process_group: true,
         };
+
+        let started = Instant::now();
+        let child = spawn_isolated(&config)?;
+        let pid = child.id();
+
+        if let Some(p) = pid {
+            register_pid(p).await;
+        }
+
+        let wait_future = child.wait_with_output();
 
         let result = if let Some(ms) = timeout_ms {
             match timeout(Duration::from_millis(ms), wait_future).await {
                 Ok(r) => r?,
-                Err(_) => return Err(anyhow!("Command timed out after {}ms", ms)),
+                Err(_) => {
+                    if let Some(p) = pid {
+                        let _ = crate::process::kill_process_tree(p, true).await;
+                    }
+                    return Err(anyhow!("Command timed out after {}ms", ms));
+                }
             }
         } else {
             wait_future.await?
         };
+
+        if let Some(p) = pid {
+            unregister_pid(p).await;
+        }
 
         let duration_ms = started.elapsed().as_millis() as u64;
 

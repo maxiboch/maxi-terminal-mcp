@@ -1,5 +1,6 @@
 pub mod output;
 pub mod path_utils;
+pub mod process;
 pub mod server;
 pub mod session;
 pub mod shell;
@@ -7,6 +8,7 @@ pub mod task;
 
 pub use output::{OutputBuffer, OutputFormat};
 pub use path_utils::normalize_path;
+pub use process::{cleanup_all_processes, SpawnConfig};
 pub use server::McpServer;
 pub use session::SessionManager;
 pub use shell::{detect_default_shell, Shell};

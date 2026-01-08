@@ -4,10 +4,13 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
-use tokio::io::AsyncReadExt;
-use tokio::process::{Child, Command};
 use tokio::sync::RwLock;
 use tokio::time::{timeout, Duration};
+
+use crate::process::{
+    graceful_kill, kill_process_tree, register_pid, spawn_isolated, unregister_pid, SpawnConfig,
+    StreamingOutput,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -28,19 +31,13 @@ pub enum OutputStream {
     Both,
 }
 
-#[derive(Debug)]
-struct TaskInner {
-    child: Option<Child>,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskInfo {
     pub id: String,
     pub command: String,
     pub status: TaskStatus,
     pub exit_code: Option<i32>,
-    pub stdout: Vec<u8>,
-    pub stderr: Vec<u8>,
+    pub pid: Option<u32>,
     #[serde(skip)]
     pub started_at: Option<Instant>,
     #[serde(skip)]
@@ -55,8 +52,7 @@ impl TaskInfo {
             command,
             status: TaskStatus::Pending,
             exit_code: None,
-            stdout: Vec::new(),
-            stderr: Vec::new(),
+            pid: None,
             started_at: None,
             completed_at: None,
             duration_ms: None,
@@ -72,7 +68,8 @@ impl TaskInfo {
 
 struct ManagedTask {
     info: TaskInfo,
-    inner: Option<TaskInner>,
+    stdout: Arc<StreamingOutput>,
+    stderr: Arc<StreamingOutput>,
 }
 
 pub struct TaskManager {
@@ -104,27 +101,41 @@ impl TaskManager {
         let task_id = uuid::Uuid::new_v4().to_string();
         let mut info = TaskInfo::new(task_id.clone(), command.clone());
 
-        let mut cmd = Command::new(&shell_path);
-        cmd.args(&shell_args)
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .stdin(std::process::Stdio::null());
+        let config = SpawnConfig {
+            program: shell_path,
+            args: shell_args,
+            cwd,
+            env,
+            new_process_group: true,
+        };
 
-        if let Some(dir) = cwd {
-            cmd.current_dir(dir);
+        let mut child = spawn_isolated(&config)?;
+        let pid = child.id();
+
+        if let Some(p) = pid {
+            register_pid(p).await;
+            info.pid = Some(p);
         }
 
-        if let Some(env_vars) = env {
-            cmd.envs(env_vars);
-        }
-
-        let child = cmd.spawn()?;
         info.status = TaskStatus::Running;
         info.started_at = Some(Instant::now());
 
+        let (stdout_stream, _) = StreamingOutput::new();
+        let (stderr_stream, _) = StreamingOutput::new();
+        let stdout_stream = Arc::new(stdout_stream);
+        let stderr_stream = Arc::new(stderr_stream);
+
+        if let Some(stdout) = child.stdout.take() {
+            stdout_stream.stream_from(stdout);
+        }
+        if let Some(stderr) = child.stderr.take() {
+            stderr_stream.stream_from(stderr);
+        }
+
         let managed = ManagedTask {
             info,
-            inner: Some(TaskInner { child: Some(child) }),
+            stdout: Arc::clone(&stdout_stream),
+            stderr: Arc::clone(&stderr_stream),
         };
 
         {
@@ -135,9 +146,20 @@ impl TaskManager {
         let tasks = Arc::clone(&self.tasks);
         let id = task_id.clone();
         let timeout_duration = timeout_ms.map(Duration::from_millis);
+        let stdout_for_wait = Arc::clone(&stdout_stream);
+        let stderr_for_wait = Arc::clone(&stderr_stream);
 
         tokio::spawn(async move {
-            Self::run_task(tasks, id, timeout_duration).await;
+            Self::run_task(
+                tasks,
+                id,
+                child,
+                pid,
+                timeout_duration,
+                stdout_for_wait,
+                stderr_for_wait,
+            )
+            .await;
         });
 
         Ok(task_id)
@@ -146,42 +168,26 @@ impl TaskManager {
     async fn run_task(
         tasks: Arc<RwLock<HashMap<String, ManagedTask>>>,
         task_id: String,
+        mut child: tokio::process::Child,
+        pid: Option<u32>,
         timeout_duration: Option<Duration>,
+        stdout_stream: Arc<StreamingOutput>,
+        stderr_stream: Arc<StreamingOutput>,
     ) {
-        let child = {
-            let mut tasks_guard = tasks.write().await;
-            if let Some(task) = tasks_guard.get_mut(&task_id) {
-                task.inner.as_mut().and_then(|i| i.child.take())
-            } else {
-                return;
-            }
-        };
-
-        let Some(mut child) = child else { return };
-
-        let mut stdout_handle = child.stdout.take();
-        let mut stderr_handle = child.stderr.take();
-
         let wait_future = async {
-            let mut stdout_data = Vec::new();
-            let mut stderr_data = Vec::new();
-
-            if let Some(ref mut stdout) = stdout_handle {
-                let _ = stdout.read_to_end(&mut stdout_data).await;
-            }
-            if let Some(ref mut stderr) = stderr_handle {
-                let _ = stderr.read_to_end(&mut stderr_data).await;
-            }
-
             let status = child.wait().await;
-            (status, stdout_data, stderr_data)
+            stdout_stream.wait_for_completion(Some(5000)).await;
+            stderr_stream.wait_for_completion(Some(5000)).await;
+            status
         };
 
         let result = if let Some(duration) = timeout_duration {
             match timeout(duration, wait_future).await {
                 Ok(r) => Some(r),
                 Err(_) => {
-                    let _ = child.kill().await;
+                    if let Some(p) = pid {
+                        let _ = kill_process_tree(p, true).await;
+                    }
                     None
                 }
             }
@@ -189,15 +195,17 @@ impl TaskManager {
             Some(wait_future.await)
         };
 
+        if let Some(p) = pid {
+            unregister_pid(p).await;
+        }
+
         let mut tasks_guard = tasks.write().await;
         if let Some(task) = tasks_guard.get_mut(&task_id) {
             task.info.completed_at = Some(Instant::now());
             task.info.compute_duration();
 
             match result {
-                Some((Ok(exit_status), stdout, stderr)) => {
-                    task.info.stdout = stdout;
-                    task.info.stderr = stderr;
+                Some(Ok(exit_status)) => {
                     task.info.exit_code = exit_status.code();
                     task.info.status = if exit_status.success() {
                         TaskStatus::Completed
@@ -205,9 +213,7 @@ impl TaskManager {
                         TaskStatus::Failed
                     };
                 }
-                Some((Err(_), stdout, stderr)) => {
-                    task.info.stdout = stdout;
-                    task.info.stderr = stderr;
+                Some(Err(_)) => {
                     task.info.status = TaskStatus::Failed;
                 }
                 None => {
@@ -237,55 +243,54 @@ impl TaskManager {
         let tasks = self.tasks.read().await;
         let task = tasks.get(task_id)?;
 
-        let data = match stream {
-            OutputStream::Stdout => &task.info.stdout,
-            OutputStream::Stderr => &task.info.stderr,
+        match stream {
+            OutputStream::Stdout => Some(task.stdout.get_slice(offset, limit).await),
+            OutputStream::Stderr => Some(task.stderr.get_slice(offset, limit).await),
             OutputStream::Both => {
-                let mut combined = task.info.stdout.clone();
-                combined.extend(&task.info.stderr);
-                return Some(crate::output::get_output_slice(&combined, offset, limit));
+                let stdout = task.stdout.get_buffer().await;
+                let stderr = task.stderr.get_buffer().await;
+                let mut combined = stdout;
+                combined.extend(stderr);
+                Some(crate::output::get_output_slice(&combined, offset, limit))
             }
-        };
+        }
+    }
 
-        Some(crate::output::get_output_slice(data, offset, limit))
+    pub async fn is_output_complete(&self, task_id: &str) -> Option<bool> {
+        let tasks = self.tasks.read().await;
+        let task = tasks.get(task_id)?;
+        let stdout_done = task.stdout.is_complete().await;
+        let stderr_done = task.stderr.is_complete().await;
+        Some(stdout_done && stderr_done)
     }
 
     pub async fn kill_task(&self, task_id: &str, force: bool) -> Result<bool> {
-        let mut tasks = self.tasks.write().await;
+        let tasks = self.tasks.read().await;
         let task = tasks
-            .get_mut(task_id)
+            .get(task_id)
             .ok_or_else(|| anyhow!("Task not found"))?;
 
         if task.info.status != TaskStatus::Running {
             return Ok(false);
         }
 
-        if let Some(inner) = &mut task.inner {
-            if let Some(child) = &mut inner.child {
-                if force {
-                    child.kill().await?;
-                } else {
-                    #[cfg(unix)]
-                    {
-                        if let Some(pid) = child.id() {
-                            unsafe {
-                                libc::kill(pid as i32, libc::SIGTERM);
-                            }
-                        }
-                    }
-                    #[cfg(not(unix))]
-                    {
-                        child.kill().await?;
-                    }
-                }
-                task.info.status = TaskStatus::Killed;
-                task.info.completed_at = Some(Instant::now());
-                task.info.compute_duration();
-                return Ok(true);
-            }
+        let pid = task.info.pid.ok_or_else(|| anyhow!("No PID for task"))?;
+        drop(tasks);
+
+        if force {
+            kill_process_tree(pid, true).await?;
+        } else {
+            graceful_kill(pid, 3000).await?;
         }
 
-        Ok(false)
+        let mut tasks = self.tasks.write().await;
+        if let Some(task) = tasks.get_mut(task_id) {
+            task.info.status = TaskStatus::Killed;
+            task.info.completed_at = Some(Instant::now());
+            task.info.compute_duration();
+        }
+
+        Ok(true)
     }
 
     pub async fn cleanup_completed(&self, max_age_secs: u64) {
@@ -307,6 +312,20 @@ impl TaskManager {
     pub async fn list_tasks(&self) -> Vec<TaskInfo> {
         let tasks = self.tasks.read().await;
         tasks.values().map(|t| t.info.clone()).collect()
+    }
+
+    pub async fn kill_all_running(&self) {
+        let tasks = self.tasks.read().await;
+        let running_pids: Vec<u32> = tasks
+            .values()
+            .filter(|t| t.info.status == TaskStatus::Running)
+            .filter_map(|t| t.info.pid)
+            .collect();
+        drop(tasks);
+
+        for pid in running_pids {
+            let _ = graceful_kill(pid, 2000).await;
+        }
     }
 }
 
@@ -333,7 +352,13 @@ mod tests {
 
         let task = manager.get_task(&task_id).await.expect("Should have task");
         assert_eq!(task.exit_code, Some(0));
-        assert!(String::from_utf8_lossy(&task.stdout).contains("hello"));
+        assert!(task.pid.is_some());
+
+        let (output, _) = manager
+            .get_output(&task_id, OutputStream::Stdout, 0, 1000)
+            .await
+            .expect("Should have output");
+        assert!(String::from_utf8_lossy(&output).contains("hello"));
     }
 
     #[tokio::test]
