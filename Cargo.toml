@@ -1,0 +1,48 @@
+[package]
+name = "maxi-terminal-mcp"
+version = "0.1.0"
+edition = "2021"
+description = "Token-efficient terminal command execution MCP server with monitoring and cross-platform support"
+license = "MIT"
+repository = "https://github.com/maxiboch/maxi-terminal-mcp"
+keywords = ["mcp", "terminal", "shell", "command", "cross-platform"]
+categories = ["command-line-utilities", "development-tools"]
+
+[dependencies]
+# Async runtime
+tokio = { version = "1.44", features = ["full", "process", "sync", "time", "io-util"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Error handling
+anyhow = "1.0"
+thiserror = "1.0"
+
+# UUID for task/session IDs
+uuid = { version = "1.11", features = ["v4"] }
+
+# ANSI stripping
+strip-ansi-escapes = "0.2"
+
+# Cross-platform utilities
+which = "7.0"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+libc = "0.2.179"
+
+[dev-dependencies]
+tokio-test = "0.4"
+tempfile = "3.14"
+
+[[bin]]
+name = "maxi-terminal-mcp"
+path = "src/main.rs"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
