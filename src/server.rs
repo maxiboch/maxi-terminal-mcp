@@ -439,7 +439,8 @@ impl McpServer {
 
     fn resolve_shell(&self, shell_arg: Option<&Value>) -> Result<Shell> {
         if let Some(s) = shell_arg.and_then(|s| s.as_str()) {
-            return Ok(serde_json::from_value(json!(s))?);
+            return Shell::from_name(s)
+                .ok_or_else(|| anyhow!("Unknown shell: {}. Options: bash, zsh, fish, pwsh, powershell, cmd, sh, nu, wsl", s));
         }
         detect_default_shell()
             .map(|(s, _)| s)

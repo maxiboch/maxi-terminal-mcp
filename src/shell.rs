@@ -19,6 +19,23 @@ pub enum Shell {
     Wsl,
 }
 
+impl Shell {
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name.to_lowercase().replace(['-', ' '], "_").as_str() {
+            "bash" => Some(Shell::Bash),
+            "zsh" => Some(Shell::Zsh),
+            "fish" => Some(Shell::Fish),
+            "pwsh" | "powershell_core" | "powershellcore" => Some(Shell::PowerShellCore),
+            "powershell" => Some(Shell::PowerShell),
+            "cmd" | "cmd.exe" => Some(Shell::Cmd),
+            "sh" => Some(Shell::Sh),
+            "nu" | "nushell" => Some(Shell::Nushell),
+            "wsl" | "wsl.exe" => Some(Shell::Wsl),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PackageManager {
@@ -314,5 +331,40 @@ mod tests {
     fn test_install_instructions() {
         let instructions = get_install_instructions(Shell::Fish);
         assert!(!instructions.is_empty());
+    }
+
+    #[test]
+    fn test_from_name_forgiving() {
+        // Exact matches
+        assert_eq!(Shell::from_name("bash"), Some(Shell::Bash));
+        assert_eq!(Shell::from_name("zsh"), Some(Shell::Zsh));
+        assert_eq!(Shell::from_name("fish"), Some(Shell::Fish));
+        assert_eq!(Shell::from_name("sh"), Some(Shell::Sh));
+        
+        // PowerShell variants (the main use case)
+        assert_eq!(Shell::from_name("pwsh"), Some(Shell::PowerShellCore));
+        assert_eq!(Shell::from_name("powershell_core"), Some(Shell::PowerShellCore));
+        assert_eq!(Shell::from_name("powershellcore"), Some(Shell::PowerShellCore));
+        assert_eq!(Shell::from_name("powershell"), Some(Shell::PowerShell));
+        
+        // Case insensitivity
+        assert_eq!(Shell::from_name("BASH"), Some(Shell::Bash));
+        assert_eq!(Shell::from_name("PowerShell"), Some(Shell::PowerShell));
+        assert_eq!(Shell::from_name("PowerShell_Core"), Some(Shell::PowerShellCore));
+        
+        // Cmd variants
+        assert_eq!(Shell::from_name("cmd"), Some(Shell::Cmd));
+        assert_eq!(Shell::from_name("cmd.exe"), Some(Shell::Cmd));
+        
+        // Nushell variants
+        assert_eq!(Shell::from_name("nu"), Some(Shell::Nushell));
+        assert_eq!(Shell::from_name("nushell"), Some(Shell::Nushell));
+        
+        // WSL variants
+        assert_eq!(Shell::from_name("wsl"), Some(Shell::Wsl));
+        assert_eq!(Shell::from_name("wsl.exe"), Some(Shell::Wsl));
+        
+        // Unknown returns None
+        assert_eq!(Shell::from_name("unknown"), None);
     }
 }
