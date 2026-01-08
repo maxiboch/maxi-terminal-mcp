@@ -99,7 +99,7 @@ impl McpServer {
             "tools": [
                 {
                     "name": "run",
-                    "description": "Execute command. Use background:true for long-running commands (returns task_id).",
+                    "description": "Execute shell command. Use background:true for long-running commands (returns task_id). POWERSHELL NOTE: In ForEach-Object blocks, use $_.Property (not .Property). Example: Get-ChildItem | ForEach-Object { $_.Name }",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
