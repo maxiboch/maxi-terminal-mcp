@@ -5,6 +5,7 @@ pub mod server;
 pub mod session;
 pub mod shell;
 pub mod task;
+pub mod interact;
 
 pub use output::{OutputBuffer, OutputFormat};
 pub use path_utils::normalize_path;
