@@ -3,6 +3,7 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::io::{BufRead, Write};
 
+use crate::cache::OutputCache;
 use crate::output::{OutputFormat, DEFAULT_MAX_BYTES};
 use crate::path_utils::normalize_path;
 use crate::process::{
@@ -18,6 +19,7 @@ use crate::task::{OutputStream, TaskManager};
 pub struct McpServer {
     task_manager: TaskManager,
     session_manager: SessionManager,
+    output_cache: OutputCache,
 }
 
 impl Default for McpServer {
@@ -31,6 +33,7 @@ impl McpServer {
         Self {
             task_manager: TaskManager::new(),
             session_manager: SessionManager::new(),
+            output_cache: OutputCache::default(),
         }
     }
 
@@ -99,7 +102,7 @@ impl McpServer {
             "tools": [
                 {
                     "name": "run",
-                    "description": "Execute command. Use background:true for long-running commands (returns task_id).",
+                    "description": "Execute command. Returns output_id for raw output retrieval via task tool. Use background:true for long-running commands.",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
@@ -117,12 +120,12 @@ impl McpServer {
                 },
                 {
                     "name": "task",
-                    "description": "Manage background tasks: status, output (paginated), kill, or list all.",
+                    "description": "Manage tasks and retrieve output. Use task_id (background) or output_id (foreground) with action:output for paginated raw access.",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
                             "action": { "type": "string", "enum": ["status", "output", "kill", "list"] },
-                            "task_id": { "type": "string", "description": "Required for status/output/kill" },
+                            "task_id": { "type": "string", "description": "Task ID or output_id from run command" },
                             "stream": { "type": "string", "enum": ["stdout", "stderr", "both"], "default": "both" },
                             "offset": { "type": "integer", "default": 0 },
                             "limit": { "type": "integer", "default": 50000 },
@@ -206,7 +209,8 @@ impl McpServer {
         let env: Option<HashMap<String, String>> = args
             .get("env")
             .and_then(|e| serde_json::from_value(e.clone()).ok());
-        let timeout_ms = args.get("timeout_ms").and_then(|t| t.as_u64());
+        // Default timeout of 30s for foreground commands to prevent MCP client timeouts
+        let timeout_ms = args.get("timeout_ms").and_then(|t| t.as_u64()).or(Some(30000));
 
         if background {
             let task_id = self
@@ -267,15 +271,37 @@ impl McpServer {
         }
 
         let duration_ms = started.elapsed().as_millis() as u64;
-        let stdout = crate::output::process_output(&output.stdout, format, max_output);
-        let stderr = crate::output::process_output(&output.stderr, format, max_output);
+
+        // Cache raw output for potential later retrieval
+        let output_id = self
+            .output_cache
+            .store(
+                output.stdout.clone(),
+                output.stderr.clone(),
+                output.status.code(),
+            )
+            .await;
+
+        // Parse output for structured representation
+        let stdout_text = String::from_utf8_lossy(&output.stdout);
+        let stderr_text = String::from_utf8_lossy(&output.stderr);
+        let parsed = crate::parser::parse_output(&stdout_text, &stderr_text, output.status.code());
+
+        let stdout_processed = crate::output::process_output(&output.stdout, format, max_output);
+        let stderr_processed = crate::output::process_output(&output.stderr, format, max_output);
 
         self.ok(&json!({
             "exit_code": output.status.code(),
-            "stdout": stdout.as_string_lossy(),
-            "stderr": stderr.as_string_lossy(),
+            "stdout": stdout_processed.as_string_lossy(),
+            "stderr": stderr_processed.as_string_lossy(),
             "duration_ms": duration_ms,
-            "truncated": stdout.truncated || stderr.truncated
+            "truncated": stdout_processed.truncated || stderr_processed.truncated,
+            "output_id": output_id,
+            "parsed": {
+                "type": parsed.output_type,
+                "summary": parsed.summary,
+                "data": parsed.data
+            }
         }))
     }
 
@@ -322,17 +348,42 @@ impl McpServer {
                     .get("task_id")
                     .and_then(|t| t.as_str())
                     .ok_or_else(|| anyhow!("Missing task_id"))?;
-                let stream = match args.get("stream").and_then(|s| s.as_str()) {
-                    Some("stdout") => OutputStream::Stdout,
-                    Some("stderr") => OutputStream::Stderr,
-                    _ => OutputStream::Both,
-                };
                 let offset = args.get("offset").and_then(|o| o.as_u64()).unwrap_or(0) as usize;
                 let limit = args
                     .get("limit")
                     .and_then(|l| l.as_u64())
                     .unwrap_or(DEFAULT_MAX_BYTES as u64) as usize;
                 let format = self.parse_format(args.get("format"));
+
+                // Check if this is a cached foreground output (output_id)
+                if task_id.starts_with("out_") {
+                    let cache_stream = match args.get("stream").and_then(|s| s.as_str()) {
+                        Some("stdout") => Some(crate::cache::OutputStream::Stdout),
+                        Some("stderr") => Some(crate::cache::OutputStream::Stderr),
+                        _ => None, // Both = combined
+                    };
+
+                    let (data, has_more) = self
+                        .output_cache
+                        .get_slice(task_id, cache_stream, offset, limit)
+                        .await
+                        .ok_or_else(|| anyhow!("Output not found or expired"))?;
+
+                    let processed = crate::output::process_output(&data, format, Some(limit));
+                    return self.ok(&json!({
+                        "output": processed.as_string_lossy(),
+                        "has_more": has_more,
+                        "total_bytes": processed.total_bytes,
+                        "truncated": processed.truncated
+                    }));
+                }
+
+                // Otherwise, treat as background task
+                let stream = match args.get("stream").and_then(|s| s.as_str()) {
+                    Some("stdout") => OutputStream::Stdout,
+                    Some("stderr") => OutputStream::Stderr,
+                    _ => OutputStream::Both,
+                };
 
                 let (data, has_more) = self
                     .task_manager

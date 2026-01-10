@@ -1,4 +1,6 @@
+pub mod cache;
 pub mod output;
+pub mod parser;
 pub mod path_utils;
 pub mod process;
 pub mod server;
@@ -6,7 +8,9 @@ pub mod session;
 pub mod shell;
 pub mod task;
 
+pub use cache::OutputCache;
 pub use output::{OutputBuffer, OutputFormat};
+pub use parser::{parse_output, OutputType, ParsedOutput};
 pub use path_utils::normalize_path;
 pub use process::{cleanup_all_processes, SpawnConfig};
 pub use server::McpServer;

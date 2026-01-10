@@ -26,6 +26,9 @@ uuid = { version = "1.11", features = ["v4"] }
 # ANSI stripping
 strip-ansi-escapes = "0.2"
 
+# Lightweight regex for output parsing
+regex-lite = "0.1"
+
 # Cross-platform utilities
 which = "7.0"
 
