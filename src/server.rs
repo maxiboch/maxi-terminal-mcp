@@ -102,7 +102,7 @@ impl McpServer {
             "tools": [
                 {
                     "name": "run",
-                    "description": "Execute command. Returns output_id for raw output retrieval via task tool. Use background:true for long-running commands.",
+                    "description": "Execute shell command. Use background:true for long-running commands (returns task_id). POWERSHELL TIP: Avoid $_ pipeline variable (may get stripped). Use direct property access: (Get-Process).WorkingSet64 instead of Get-Process | ForEach-Object { $_.WorkingSet64 }",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
@@ -166,6 +166,20 @@ impl McpServer {
                         },
                         "required": ["action"]
                     }
+                },
+                {
+                    "name": "interact",
+                    "description": "Interactive TUI prompts: input, confirm, select, multiselect. Requires TTY (terminal) environment.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "kind": { "type": "string", "enum": ["input", "confirm", "select", "multiselect"] },
+                            "message": { "type": "string" },
+                            "options": { "type": "array", "items": { "type": "string" }, "description": "For select/multiselect" },
+                            "default": { "type": ["string", "boolean"], "description": "Default value" }
+                        },
+                        "required": ["kind", "message"]
+                    }
                 }
             ]
         }))
@@ -183,7 +197,9 @@ impl McpServer {
             "run" => self.tool_run(&args).await,
             "task" => self.tool_task(&args).await,
             "session" => self.tool_session(&args).await,
+
             "shell" => self.tool_shell(&args).await,
+            "interact" => self.tool_interact(&args).await,
             _ => Err(anyhow!("Unknown tool: {}", name)),
         }
     }
@@ -533,6 +549,17 @@ impl McpServer {
             .map(|(s, _)| s)
             .ok_or_else(|| anyhow!("No shell available"))
     }
+
+    async fn tool_interact(&self, args: &Value) -> Result<Value> {
+        let result = tokio::task::spawn_blocking({
+            let args = args.clone();
+            move || crate::interact::handle_interact(&args)
+        })
+        .await??;
+        
+        self.ok(&result)
+    }
+
 
     fn parse_format(&self, format_arg: Option<&Value>) -> OutputFormat {
         match format_arg.and_then(|f| f.as_str()) {

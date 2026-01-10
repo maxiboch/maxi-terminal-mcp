@@ -7,6 +7,7 @@ pub mod server;
 pub mod session;
 pub mod shell;
 pub mod task;
+pub mod interact;
 
 pub use cache::OutputCache;
 pub use output::{OutputBuffer, OutputFormat};

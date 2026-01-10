@@ -36,7 +36,8 @@ which = "7.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 libc = "0.2.179"
-
+inquire = "0.7"
+atty = "0.2"
 [dev-dependencies]
 tokio-test = "0.4"
 tempfile = "3.14"
