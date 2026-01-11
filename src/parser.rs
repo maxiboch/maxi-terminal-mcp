@@ -223,17 +223,22 @@ fn try_parse_build_output(stdout: &str, stderr: &str, exit_code: Option<i32>) ->
     let combined = format!("{}\n{}", stdout, stderr);
     let lower = combined.to_lowercase();
 
-    // Detect build patterns
+    // Detect build patterns - must be specific build tool indicators
+    // Avoid matching generic text that happens to contain "error" or "warning"
     let is_build = lower.contains("compiling")
         || lower.contains("building")
-        || lower.contains("compiled")
+        || lower.contains("compiled successfully")
+        || lower.contains("build succeeded")
+        || lower.contains("build failed")
         || lower.contains("bundled")
         || lower.contains("webpack")
         || lower.contains("vite")
         || lower.contains("esbuild")
-        || lower.contains("tsc")
-        || (lower.contains("error") && lower.contains("warning"))
-        || lower.contains("finished `");
+        || lower.contains("tsc ")
+        || lower.contains("finished `")
+        || lower.contains("cargo build")
+        || lower.contains("npm run build")
+        || lower.contains("make:");
 
     if !is_build {
         return None;
