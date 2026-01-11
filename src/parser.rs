@@ -221,24 +221,28 @@ fn try_parse_test_results(stdout: &str, stderr: &str, exit_code: Option<i32>) ->
 
 fn try_parse_build_output(stdout: &str, stderr: &str, exit_code: Option<i32>) -> Option<ParsedOutput> {
     let combined = format!("{}\n{}", stdout, stderr);
-    let lower = combined.to_lowercase();
 
-    // Detect build patterns - must be specific build tool indicators
-    // Avoid matching generic text that happens to contain "error" or "warning"
-    let is_build = lower.contains("compiling")
-        || lower.contains("building")
-        || lower.contains("compiled successfully")
-        || lower.contains("build succeeded")
-        || lower.contains("build failed")
-        || lower.contains("bundled")
-        || lower.contains("webpack")
-        || lower.contains("vite")
-        || lower.contains("esbuild")
-        || lower.contains("tsc ")
-        || lower.contains("finished `")
-        || lower.contains("cargo build")
-        || lower.contains("npm run build")
-        || lower.contains("make:");
+    // Detect build patterns by looking for lines that START with build indicators
+    // This avoids matching diffs or code that happens to contain these words
+    let build_line_patterns = [
+        r"^\s*Compiling\s+\S+",      // Cargo: "   Compiling foo v1.0.0"
+        r"^\s*Building\s+",          // Generic: "Building..."
+        r"^\s*Finished\s+`",         // Cargo: "Finished `release`"
+        r"^\s*Bundling\s+",          // Bundlers
+        r"^webpack\s+",              // Webpack
+        r"^\s*\[vite\]",             // Vite
+        r"^\s*esbuild\s+",           // esbuild  
+        r"^tsc\s+",                  // TypeScript
+        r"^make\[\d+\]:",            // Make
+        r"^make:",                   // Make
+        r"^\s*Built\s+in\s+",        // Various: "Built in 2.3s"
+    ];
+    
+    let is_build = build_line_patterns.iter().any(|pattern| {
+        regex_lite::Regex::new(pattern)
+            .map(|re| re.is_match(&combined))
+            .unwrap_or(false)
+    });
 
     if !is_build {
         return None;
