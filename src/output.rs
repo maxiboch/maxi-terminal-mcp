@@ -11,8 +11,11 @@ pub enum OutputFormat {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OutputBuffer {
+    #[serde(rename = "d")]
     pub data: Vec<u8>,
+    #[serde(rename = "n")]
     pub total_bytes: usize,
+    #[serde(rename = "t")]
     pub truncated: bool,
 }
 
@@ -145,14 +148,18 @@ pub fn smart_truncate(
     (result, true)
 }
 
-pub const DEFAULT_MAX_BYTES: usize = 50_000;
-pub const DEFAULT_HEAD_LINES: usize = 100;
-pub const DEFAULT_TAIL_LINES: usize = 50;
-pub const DEFAULT_MAX_LINES: usize = 200;
+/// Hard cap on response size - ~4k tokens max to prevent context blowup
+/// 16KB / 4 bytes per token ≈ 4000 tokens
+pub const HARD_MAX_BYTES: usize = 16_000;
+pub const DEFAULT_MAX_BYTES: usize = 16_000;
+pub const DEFAULT_HEAD_LINES: usize = 50;
+pub const DEFAULT_TAIL_LINES: usize = 30;
+pub const DEFAULT_MAX_LINES: usize = 100;
 pub const DEFAULT_DEDUP_THRESHOLD: usize = 5;
 
 pub fn process_output(raw: &[u8], format: OutputFormat, max_bytes: Option<usize>) -> OutputBuffer {
-    let max = max_bytes.unwrap_or(DEFAULT_MAX_BYTES);
+    // Always enforce hard cap regardless of what caller requests
+    let max = max_bytes.unwrap_or(DEFAULT_MAX_BYTES).min(HARD_MAX_BYTES);
     let total_bytes = raw.len();
 
     match format {
@@ -307,3 +314,4 @@ mod tests {
         assert!(!has_more);
     }
 }
+

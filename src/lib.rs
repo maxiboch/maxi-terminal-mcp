@@ -8,6 +8,7 @@ pub mod session;
 pub mod shell;
 pub mod task;
 pub mod interact;
+pub mod elicitation;
 
 pub use cache::OutputCache;
 pub use output::{OutputBuffer, OutputFormat};

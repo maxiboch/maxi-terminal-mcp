@@ -11,6 +11,8 @@ pub enum OutputType {
     BuildOutput,
     /// Git status output
     GitStatus,
+    /// Claude Code agent transcript (JSONL format)
+    AgentTranscript,
     /// Generic error output
     Error,
     /// Unstructured/unknown output
@@ -43,6 +45,11 @@ impl ParsedOutput {
 
 /// Parse raw output into structured form based on content patterns
 pub fn parse_output(stdout: &str, stderr: &str, exit_code: Option<i32>) -> ParsedOutput {
+    // Check for Claude agent transcript first (highest priority - these are huge)
+    if let Some(parsed) = try_parse_agent_transcript(stdout) {
+        return parsed;
+    }
+
     // Check for test results first (highest value)
     if let Some(parsed) = try_parse_test_results(stdout, stderr, exit_code) {
         return parsed;
@@ -70,6 +77,82 @@ pub fn parse_output(stdout: &str, stderr: &str, exit_code: Option<i32>) -> Parse
         format!("{}\n{}", stdout, stderr)
     };
     ParsedOutput::plain(&combined)
+}
+
+/// Detect and extract summary from Claude Code agent JSONL transcripts
+/// These files contain full conversation history but we only want the final result
+fn try_parse_agent_transcript(stdout: &str) -> Option<ParsedOutput> {
+    // Quick check: must have JSONL structure with agent markers
+    if !stdout.contains(r#""agentId":"#) || !stdout.contains(r#""type":"assistant"#) {
+        return None;
+    }
+    
+    // Verify it looks like JSONL (lines starting with {)
+    let lines: Vec<&str> = stdout.lines().collect();
+    let jsonl_lines: Vec<&str> = lines.iter()
+        .filter(|l| l.trim().starts_with('{'))
+        .copied()
+        .collect();
+    
+    if jsonl_lines.len() < 2 {
+        return None;
+    }
+    
+    // Parse last few lines to find final assistant message with text content
+    let mut final_text: Option<String> = None;
+    let mut agent_id: Option<String> = None;
+    
+    for line in jsonl_lines.iter().rev().take(20) {
+        if let Ok(obj) = serde_json::from_str::<Value>(line) {
+            // Extract agent ID if we don't have it
+            if agent_id.is_none() {
+                if let Some(id) = obj.get("agentId").and_then(|v| v.as_str()) {
+                    agent_id = Some(id.to_string());
+                }
+            }
+            
+            // Look for assistant message with text content
+            if obj.get("type").and_then(|t| t.as_str()) == Some("assistant") {
+                if let Some(message) = obj.get("message") {
+                    if let Some(content) = message.get("content").and_then(|c| c.as_array()) {
+                        for item in content {
+                            if item.get("type").and_then(|t| t.as_str()) == Some("text") {
+                                if let Some(text) = item.get("text").and_then(|t| t.as_str()) {
+                                    // Found final text - use this
+                                    final_text = Some(text.to_string());
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // If we found text, stop searching
+            if final_text.is_some() {
+                break;
+            }
+        }
+    }
+    
+    let text = final_text?;
+    
+    // Truncate if very long
+    let summary = if text.len() > 2000 {
+        format!("{}...\n[truncated from {} chars]", &text[..2000], text.len())
+    } else {
+        text.clone()
+    };
+    
+    Some(ParsedOutput {
+        output_type: OutputType::AgentTranscript,
+        summary,
+        data: Some(json!({
+            "agent_id": agent_id,
+            "transcript_lines": jsonl_lines.len(),
+            "final_text_length": text.len()
+        })),
+    })
 }
 
 fn try_parse_test_results(stdout: &str, stderr: &str, exit_code: Option<i32>) -> Option<ParsedOutput> {
