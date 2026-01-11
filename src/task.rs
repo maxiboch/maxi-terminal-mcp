@@ -36,12 +36,14 @@ pub struct TaskInfo {
     pub id: String,
     pub command: String,
     pub status: TaskStatus,
+    #[serde(rename = "exit")]
     pub exit_code: Option<i32>,
     pub pid: Option<u32>,
     #[serde(skip)]
     pub started_at: Option<Instant>,
     #[serde(skip)]
     pub completed_at: Option<Instant>,
+    #[serde(rename = "dur")]
     pub duration_ms: Option<u64>,
 }
 
@@ -240,15 +242,19 @@ impl TaskManager {
         offset: usize,
         limit: usize,
     ) -> Option<(Vec<u8>, bool)> {
-        let tasks = self.tasks.read().await;
-        let task = tasks.get(task_id)?;
+        // Clone Arc refs before releasing lock to avoid deadlock
+        let (stdout_stream, stderr_stream) = {
+            let tasks = self.tasks.read().await;
+            let task = tasks.get(task_id)?;
+            (Arc::clone(&task.stdout), Arc::clone(&task.stderr))
+        };
 
         match stream {
-            OutputStream::Stdout => Some(task.stdout.get_slice(offset, limit).await),
-            OutputStream::Stderr => Some(task.stderr.get_slice(offset, limit).await),
+            OutputStream::Stdout => Some(stdout_stream.get_slice(offset, limit).await),
+            OutputStream::Stderr => Some(stderr_stream.get_slice(offset, limit).await),
             OutputStream::Both => {
-                let stdout = task.stdout.get_buffer().await;
-                let stderr = task.stderr.get_buffer().await;
+                let stdout = stdout_stream.get_buffer().await;
+                let stderr = stderr_stream.get_buffer().await;
                 let mut combined = stdout;
                 combined.extend(stderr);
                 Some(crate::output::get_output_slice(&combined, offset, limit))
@@ -257,10 +263,14 @@ impl TaskManager {
     }
 
     pub async fn is_output_complete(&self, task_id: &str) -> Option<bool> {
-        let tasks = self.tasks.read().await;
-        let task = tasks.get(task_id)?;
-        let stdout_done = task.stdout.is_complete().await;
-        let stderr_done = task.stderr.is_complete().await;
+        // Clone Arc refs before releasing lock to avoid deadlock
+        let (stdout_stream, stderr_stream) = {
+            let tasks = self.tasks.read().await;
+            let task = tasks.get(task_id)?;
+            (Arc::clone(&task.stdout), Arc::clone(&task.stderr))
+        };
+        let stdout_done = stdout_stream.is_complete().await;
+        let stderr_done = stderr_stream.is_complete().await;
         Some(stdout_done && stderr_done)
     }
 
@@ -400,3 +410,4 @@ mod tests {
         assert!(!tasks.is_empty());
     }
 }
+

@@ -37,9 +37,13 @@ impl Default for SessionManager {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CommandResult {
+    #[serde(rename = "exit")]
     pub exit_code: Option<i32>,
+    #[serde(rename = "out")]
     pub stdout: OutputBuffer,
+    #[serde(rename = "err")]
     pub stderr: OutputBuffer,
+    #[serde(rename = "dur")]
     pub duration_ms: u64,
 }
 
@@ -104,13 +108,38 @@ impl SessionManager {
             )
         };
 
+        // Check if this is a simple "cd" command - handle it without spawning a shell
+        let trimmed = command.trim();
+        if let Some(new_cwd) = Self::parse_cd_command(trimmed, &cwd) {
+            if new_cwd.exists() && new_cwd.is_dir() {
+                self.update_session_cwd(session_id, new_cwd).await?;
+                return Ok(CommandResult {
+                    exit_code: Some(0),
+                    stdout: OutputBuffer::new(Vec::new(), 0, false),
+                    stderr: OutputBuffer::new(Vec::new(), 0, false),
+                    duration_ms: 0,
+                });
+            } else {
+                return Ok(CommandResult {
+                    exit_code: Some(1),
+                    stdout: OutputBuffer::new(Vec::new(), 0, false),
+                    stderr: process_output(
+                        format!("cd: no such directory: {}", trimmed).as_bytes(),
+                        format,
+                        max_output,
+                    ),
+                    duration_ms: 0,
+                });
+            }
+        }
+
         let shell_path = which::which(shell.executable_name())?;
         let args = shell.command_args(command);
 
         let config = SpawnConfig {
             program: shell_path,
             args,
-            cwd: Some(cwd),
+            cwd: Some(cwd.clone()),
             env: Some(env),
             new_process_group: true,
         };
@@ -148,12 +177,70 @@ impl SessionManager {
         let stdout = process_output(&result.stdout, format, max_output);
         let stderr = process_output(&result.stderr, format, max_output);
 
+        // Try to extract cwd changes from compound commands containing cd
+        if result.status.success() {
+            if let Some(new_cwd) = Self::extract_cd_from_compound(command, &cwd) {
+                if new_cwd.exists() && new_cwd.is_dir() {
+                    let _ = self.update_session_cwd(session_id, new_cwd).await;
+                }
+            }
+        }
+
         Ok(CommandResult {
             exit_code: result.status.code(),
             stdout,
             stderr,
             duration_ms,
         })
+    }
+
+    /// Parse a simple "cd <path>" command and return the new directory
+    fn parse_cd_command(command: &str, current_cwd: &PathBuf) -> Option<PathBuf> {
+        let parts: Vec<&str> = command.split_whitespace().collect();
+        if parts.len() > 2 || parts.is_empty() {
+            return None; // Not a simple cd command
+        }
+        if parts[0] != "cd" {
+            return None;
+        }
+        
+        let target = parts.get(1).copied().unwrap_or("~");
+        let new_dir = if target == "~" {
+            std::env::var("USERPROFILE")
+                .or_else(|_| std::env::var("HOME"))
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| PathBuf::from("/"))
+        } else if target == "-" {
+            return None; // Can't handle "cd -" without history
+        } else {
+            let path = PathBuf::from(target);
+            if path.is_absolute() {
+                path
+            } else {
+                current_cwd.join(path)
+            }
+        };
+        
+        // Canonicalize to resolve .. and . components
+        new_dir.canonicalize().ok()
+    }
+
+    /// Extract cd target from compound commands like "cd /foo && pwd"
+    fn extract_cd_from_compound(command: &str, current_cwd: &PathBuf) -> Option<PathBuf> {
+        // Look for "cd <path>" at the start of compound commands
+        let command = command.trim();
+        
+        // Handle "cd /path && ..." or "cd /path; ..."
+        for sep in ["&&", ";", "||"] {
+            if let Some(first_cmd) = command.split(sep).next() {
+                let first_cmd = first_cmd.trim();
+                if first_cmd.starts_with("cd ") {
+                    return Self::parse_cd_command(first_cmd, current_cwd);
+                }
+            }
+        }
+        
+        None
     }
 
     pub async fn get_session(&self, session_id: &str) -> Option<SessionInfo> {
@@ -280,3 +367,4 @@ mod tests {
         assert_eq!(sessions.len(), 2);
     }
 }
+
