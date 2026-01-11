@@ -154,7 +154,7 @@ impl McpServer {
             "tools": [
                 {
                     "name": "run",
-                    "description": "Execute shell command. Use background:true for long-running commands (returns task_id). POWERSHELL TIP: Avoid $_ pipeline variable (may get stripped). Use direct property access: (Get-Process).WorkingSet64 instead of Get-Process | ForEach-Object { $_.WorkingSet64 }",
+                    "description": "Execute shell command. Use background:true for long-running commands (returns task_id). Returns 'oid' (output ID) in response for all runs, which can be used with 'task' action:output to page through full output if truncated. POWERSHELL TIP: Avoid $_ pipeline variable (may get stripped). Use direct property access: (Get-Process).WorkingSet64 instead of Get-Process | ForEach-Object { $_.WorkingSet64 }",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
@@ -172,7 +172,7 @@ impl McpServer {
                 },
                 {
                     "name": "task",
-                    "description": "Manage tasks and retrieve output. Use task_id (background) or output_id (foreground) with action:output for paginated raw access.",
+                    "description": "Manage background tasks or retrieve output from any run. Works with BOTH 'task_id' (from background:true) and 'oid' (from any run). The 'output' action supports pagination via 'offset' and 'limit' params, and returns 'has_more: true' if more content is available.",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
@@ -189,7 +189,7 @@ impl McpServer {
                 },
                 {
                     "name": "session",
-                    "description": "Persistent shell sessions (preserve env/cwd): create, run command, destroy, or list.",
+                    "description": "Persistent shell sessions: create, run command, destroy, or list. Sessions preserve working directory and environment variables across multiple commands.",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
