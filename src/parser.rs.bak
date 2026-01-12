@@ -31,7 +31,7 @@ pub struct ParsedOutput {
 impl ParsedOutput {
     pub fn plain(text: &str) -> Self {
         let summary = if text.len() > 200 {
-            format!("{}...\n[Use task output with oid to paginate]", &text[..200])
+            format!("{}...", &text[..200])
         } else {
             text.to_string()
         };
