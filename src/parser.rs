@@ -30,8 +30,8 @@ pub struct ParsedOutput {
 
 impl ParsedOutput {
     pub fn plain(text: &str) -> Self {
-        let summary = if text.len() > 3000 {
-            format!("{}...\n[Output truncated. Use task output with oid for full content]", &text[..3000])
+        let summary = if text.len() > 1000 {
+            format!("{}...\n[Output truncated. Use task output with oid for full content]", &text[..1000])
         } else {
             text.to_string()
         };
