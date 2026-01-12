@@ -335,7 +335,15 @@ impl McpServer {
 
         let stdout_text = String::from_utf8_lossy(&output.stdout);
         let stderr_text = String::from_utf8_lossy(&output.stderr);
-        let parsed = crate::parser::parse_output(&stdout_text, &stderr_text, output.status.code());
+        let mut parsed = crate::parser::parse_output(&stdout_text, &stderr_text, output.status.code());
+
+        // Inject actual output_id into truncation message
+        if parsed.summary.contains("[Output truncated. Use task output with oid") {
+            parsed.summary = parsed.summary.replace(
+                "with oid for",
+                &format!("with oid=\"{}\" for", output_id)
+            );
+        }
 
         // Response is ALWAYS structured - raw output available via output_id pagination
         // This keeps responses small and predictable
@@ -501,7 +509,15 @@ impl McpServer {
                 
                 let stdout_text = String::from_utf8_lossy(&result.stdout.data);
                 let stderr_text = String::from_utf8_lossy(&result.stderr.data);
-                let parsed = crate::parser::parse_output(&stdout_text, &stderr_text, result.exit_code);
+                let mut parsed = crate::parser::parse_output(&stdout_text, &stderr_text, result.exit_code);
+
+                // Inject actual output_id into truncation message
+                if parsed.summary.contains("[Output truncated. Use task output with oid") {
+                    parsed.summary = parsed.summary.replace(
+                        "with oid for",
+                        &format!("with oid=\"{}\" for", oid)
+                    );
+                }
                 
                 self.ok(&json!({
                     "exit": result.exit_code,

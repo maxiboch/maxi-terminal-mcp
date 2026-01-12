@@ -30,8 +30,8 @@ pub struct ParsedOutput {
 
 impl ParsedOutput {
     pub fn plain(text: &str) -> Self {
-        let summary = if text.len() > 200 {
-            format!("{}...\n[Use task output with oid to paginate]", &text[..200])
+        let summary = if text.len() > 3000 {
+            format!("{}...\n[Output truncated. Use task output with oid for full content]", &text[..3000])
         } else {
             text.to_string()
         };
@@ -138,8 +138,8 @@ fn try_parse_agent_transcript(stdout: &str) -> Option<ParsedOutput> {
     let text = final_text?;
     
     // Truncate if very long
-    let summary = if text.len() > 2000 {
-        format!("{}...\n[truncated from {} chars]", &text[..2000], text.len())
+    let summary = if text.len() > 3000 {
+        format!("{}...\n[truncated from {} chars]", &text[..3000], text.len())
     } else {
         text.clone()
     };
