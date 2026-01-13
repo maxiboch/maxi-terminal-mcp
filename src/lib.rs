@@ -1,14 +1,15 @@
 pub mod cache;
+pub mod elicitation;
+pub mod interact;
 pub mod output;
 pub mod parser;
 pub mod path_utils;
 pub mod process;
+pub mod rate_limit;
 pub mod server;
 pub mod session;
 pub mod shell;
 pub mod task;
-pub mod interact;
-pub mod elicitation;
 
 pub use cache::OutputCache;
 pub use output::{OutputBuffer, OutputFormat};

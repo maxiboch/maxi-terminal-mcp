@@ -17,6 +17,7 @@ use crate::shell::{
     detect_available_package_managers, detect_available_shells, detect_default_shell, ensure_shell,
     get_install_instructions, Shell,
 };
+use crate::rate_limit::{CallInfo, RateLimitConfig, RateLimitResult, RateLimiter};
 use crate::task::{OutputStream, TaskManager};
 
 pub struct McpServer {
@@ -25,6 +26,7 @@ pub struct McpServer {
     output_cache: OutputCache,
     client_capabilities: Arc<Mutex<ClientCapabilities>>,
     elicitation_manager: Arc<ElicitationManager>,
+    rate_limiter: RateLimiter,
 }
 
 impl Default for McpServer {
@@ -41,6 +43,7 @@ impl McpServer {
             output_cache: OutputCache::default(),
             client_capabilities: Arc::new(Mutex::new(ClientCapabilities::default())),
             elicitation_manager: Arc::new(ElicitationManager::new()),
+            rate_limiter: RateLimiter::new(RateLimitConfig::default()),
         }
     }
 
@@ -231,6 +234,25 @@ impl McpServer {
 
         let args = params.get("arguments").cloned().unwrap_or(json!({}));
 
+        // Check rate limits for polling operations
+        let call_info = RateLimiter::make_call_info(name, &args);
+        if call_info.is_poll {
+            match self.rate_limiter.check(&call_info).await {
+                RateLimitResult::Allow => {}
+                RateLimitResult::Warn { message, .. } => {
+                    // Log warning but allow the call to proceed
+                    eprintln!("[rate-limit] {}", message);
+                }
+                RateLimitResult::Block { message, retry_after_ms } => {
+                    return Err(anyhow!(
+                        "POLLING BLOCKED: {} Retry after {}ms.",
+                        message,
+                        retry_after_ms
+                    ));
+                }
+            }
+        }
+
         match name {
             "run" => self.tool_run(&args).await,
             "task" => self.tool_task(&args).await,
@@ -276,6 +298,9 @@ impl McpServer {
                     env,
                 )
                 .await?;
+
+            // Register task for rate limiting - tracks when polling starts
+            self.rate_limiter.register_task(&task_id).await;
 
             return self.ok(&json!({ "task_id": task_id }));
         }
@@ -386,12 +411,17 @@ impl McpServer {
                     .is_output_complete(task_id)
                     .await
                     .unwrap_or(true);
+                
+                // Include continuation hint - where to resume reading output
+                let bytes_read = self.rate_limiter.get_bytes_returned(task_id).await;
+                
                 self.ok(&json!({
                     "st": task.status,
                     "exit": task.exit_code,
                     "dur": task.duration_ms,
                     "pid": task.pid,
-                    "done": output_complete
+                    "done": output_complete,
+                    "next_offset": bytes_read  // Resume output from here to avoid re-reading
                 }))
             }
             "output" => {
@@ -439,12 +469,18 @@ impl McpServer {
                     .get_output(task_id, stream, offset, limit)
                     .await
                     .ok_or_else(|| anyhow!("Task not found"))?;
+                
+                // Record bytes returned for continuation tracking
+                let bytes_read = data.len();
+                let next_offset = self.rate_limiter.record_bytes_returned(task_id, offset, bytes_read).await;
+                
                 let processed = crate::output::process_output(&data, format, Some(limit));
                 self.ok(&json!({
                     "output": processed.as_string_lossy(),
                     "has_more": has_more,
                     "total_bytes": processed.total_bytes,
-                    "truncated": processed.truncated
+                    "truncated": processed.truncated,
+                    "next_offset": next_offset  // Use this offset to continue reading
                 }))
             }
             "kill" => {
