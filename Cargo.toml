@@ -9,6 +9,9 @@ keywords = ["mcp", "terminal", "shell", "command", "cross-platform"]
 categories = ["command-line-utilities", "development-tools"]
 
 [dependencies]
+# Shared utilities
+maxi-mcp-utils = { path = "../maxi-mcp-utils" }
+
 # Async runtime
 tokio = { version = "1.44", features = ["full", "process", "sync", "time", "io-util"] }
 
