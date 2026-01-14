@@ -20,3 +20,4 @@ pub use server::McpServer;
 pub use session::SessionManager;
 pub use shell::{detect_default_shell, Shell};
 pub use task::{TaskManager, TaskStatus};
+pub mod file_ops;

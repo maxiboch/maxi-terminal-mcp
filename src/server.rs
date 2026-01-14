@@ -9,6 +9,7 @@ use crate::cache::OutputCache;
 use crate::elicitation::{ClientCapabilities, ElicitAction, ElicitationManager, RequestSchema, schemas};
 use crate::output::{OutputFormat, DEFAULT_MAX_BYTES};
 use crate::path_utils::normalize_path;
+use crate::file_ops::{try_intercept, InterceptResult};
 use crate::process::{
     cleanup_all_processes, register_pid, spawn_isolated, unregister_pid, SpawnConfig,
 };
@@ -268,6 +269,12 @@ impl McpServer {
             .get("command")
             .and_then(|c| c.as_str())
             .ok_or_else(|| anyhow!("Missing command"))?;
+
+        // Try to intercept file operations and delegate to maxi-ide
+        let cwd_for_intercept = args.get("cwd").and_then(|c| c.as_str()).map(std::path::Path::new);
+        if let InterceptResult::Handled(result) = try_intercept(command, cwd_for_intercept).await {
+            return Ok(result);
+        }
 
         let background = args
             .get("background")
