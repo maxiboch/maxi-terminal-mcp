@@ -17,7 +17,7 @@ use crate::shell::{
     detect_available_package_managers, detect_available_shells, detect_default_shell, ensure_shell,
     get_install_instructions, Shell,
 };
-use crate::rate_limit::{CallInfo, RateLimitConfig, RateLimitResult, RateLimiter};
+use crate::rate_limit::{RateLimitConfig, RateLimitResult, RateLimiter};
 use crate::task::{OutputStream, TaskManager};
 
 pub struct McpServer {
@@ -305,8 +305,8 @@ impl McpServer {
             return self.ok(&json!({ "task_id": task_id }));
         }
 
-        let format = self.parse_format(args.get("format"));
-        let max_output = args
+        let _format = self.parse_format(args.get("format"));
+        let _max_output = args
             .get("max_output")
             .and_then(|m| m.as_u64())
             .map(|m| m as usize);

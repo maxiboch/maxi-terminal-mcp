@@ -71,6 +71,7 @@ pub fn spawn_isolated(config: &SpawnConfig) -> Result<Child> {
 
     #[cfg(windows)]
     if config.new_process_group {
+        #[allow(unused_imports)]
         use std::os::windows::process::CommandExt;
         const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
         cmd.creation_flags(CREATE_NEW_PROCESS_GROUP);
@@ -97,9 +98,12 @@ pub async fn kill_process_tree(pid: u32, force: bool) -> Result<()> {
     #[cfg(windows)]
     {
         use std::process::Command as StdCommand;
-        let _ = StdCommand::new("taskkill")
-            .args(["/PID", &pid.to_string(), "/T", "/F"])
-            .output();
+        let pid_str = pid.to_string();
+        let mut args = vec!["/PID", &pid_str, "/T"];
+        if force {
+            args.push("/F");
+        }
+        let _ = StdCommand::new("taskkill").args(&args).output();
     }
 
     unregister_pid(pid).await;
