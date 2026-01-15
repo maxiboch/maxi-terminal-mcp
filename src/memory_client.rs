@@ -186,9 +186,9 @@ impl CmdEstimate {
     /// Format as a hint string for the agent
     pub fn as_hint(&self) -> String {
         if self.samples > 0 {
-            format!("Task running. Wait {} before checking again.", self.hint)
+            format!("STOP POLLING. Task running. Sleep for {} then check once. Do NOT poll in a loop.", self.hint)
         } else {
-            "Task running. Wait ~5s before checking again.".to_string()
+            "STOP POLLING. Task running. Sleep for ~10s then check once. Do NOT poll repeatedly.".to_string()
         }
     }
 }
