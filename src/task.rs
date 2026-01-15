@@ -13,24 +13,30 @@ use crate::process::{
     StreamingOutput,
 };
 
-// Fruit + candy themed task names
+// 90s EXTREME candy + fruit task names
 static TASK_COUNTER: AtomicU32 = AtomicU32::new(0);
 
-const FRUITS: &[&str] = &[
-    "mango", "peach", "berry", "melon", "grape", "lemon", "apple", "cherry",
-    "plum", "kiwi", "fig", "pear", "lime", "guava", "papaya", "coconut",
+const EXTREME: &[&str] = &[
+    "atomic", "mega", "ultra", "turbo", "hyper", "super", "extreme", "radical",
+    "sonic", "cosmic", "nuclear", "nitro", "power", "blast", "surge", "fury",
 ];
 
 const CANDY: &[&str] = &[
-    "taffy", "fudge", "truffle", "toffee", "caramel", "nougat", "brittle", "sorbet",
-    "gelato", "praline", "bonbon", "mousse", "parfait", "sundae", "swirl", "twist",
+    "sour", "fizz", "pop", "bang", "zap", "burst", "shock", "punch",
+    "rush", "boom", "zing", "warp", "blitz", "crush", "slam", "rip",
+];
+
+const FRUITS: &[&str] = &[
+    "mango", "peach", "berry", "melon", "grape", "lemon", "apple", "cherry",
+    "lime", "kiwi", "guava", "papaya", "orange", "punch", "blast", "razz",
 ];
 
 fn next_task_id() -> String {
     let n = TASK_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let fruit = FRUITS[n as usize % FRUITS.len()];
-    let candy = CANDY[(n as usize / FRUITS.len()) % CANDY.len()];
-    format!("{}_{}", fruit, candy)
+    let extreme = EXTREME[n as usize % EXTREME.len()];
+    let candy = CANDY[(n as usize / EXTREME.len()) % CANDY.len()];
+    let fruit = FRUITS[(n as usize / (EXTREME.len() * CANDY.len())) % FRUITS.len()];
+    format!("{}_{}_{}", extreme, candy, fruit)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
