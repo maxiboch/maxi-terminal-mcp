@@ -374,11 +374,10 @@ impl McpServer {
             // Register task for rate limiting with expected duration
             self.rate_limiter.register_task(&task_id, expected_ms).await;
 
-            let expected_secs = expected_ms / 1000;
             return self.ok(&json!({
-                "task_id": task_id,
-                "expected_secs": expected_secs,
-                "hint": format!("Use `task` with action `wait` to block until done (~{}s). Polling incurs penalty delays proportional to runtime.", expected_secs)
+                "tid": task_id,
+                "exp": expected_ms,
+                "hint": "Use action `wait` to block. Polling penalized."
             }));
         }
 
@@ -502,12 +501,11 @@ impl McpServer {
                     "dur": task.duration_ms,
                     "pid": task.pid,
                     "done": output_complete,
-                    "next_offset": bytes_read,
-                    // Timing info - always included so agent knows how long to wait
-                    "expected_ms": timing.expected_ms,
-                    "elapsed_ms": timing.elapsed_ms,
-                    "remaining_ms": timing.remaining_ms,
-                    "wait_ms": timing.recommended_wait_ms
+                    "off": bytes_read,
+                    "exp": timing.expected_ms,
+                    "elap": timing.elapsed_ms,
+                    "rem": timing.remaining_ms,
+                    "wait": timing.recommended_wait_ms
                 }))
             }
             "output" => {
@@ -644,10 +642,10 @@ impl McpServer {
                 let processed = crate::output::process_output(&data, format, None);
 
                 self.ok(&json!({
-                    "status": task.status,
-                    "exit_code": task.exit_code,
-                    "duration_ms": task.duration_ms,
-                    "output": processed.as_string_lossy()
+                    "st": task.status,
+                    "exit": task.exit_code,
+                    "dur": task.duration_ms,
+                    "out": processed.as_string_lossy()
                 }))
             }
             _ => Err(anyhow!("Unknown action: {}", action)),
