@@ -512,19 +512,40 @@ impl McpServer {
                     .get_output(task_id, stream, offset, limit)
                     .await
                     .ok_or_else(|| anyhow!("Task not found"))?;
-                
+
                 // Record bytes returned for continuation tracking
                 let bytes_read = data.len();
                 let next_offset = self.rate_limiter.record_bytes_returned(task_id, offset, bytes_read).await;
-                
+
+                // Check if task is done to guide polling behavior
+                let task_done = self
+                    .task_manager
+                    .is_output_complete(task_id)
+                    .await
+                    .unwrap_or(true);
+
                 let processed = crate::output::process_output(&data, format, Some(limit));
-                self.ok(&json!({
+
+                // Build response with guidance on whether to poll again
+                let mut response = json!({
                     "output": processed.as_string_lossy(),
                     "has_more": has_more,
-                    "total_bytes": processed.total_bytes,
-                    "truncated": processed.truncated,
-                    "next_offset": next_offset  // Use this offset to continue reading
-                }))
+                    "next_offset": next_offset
+                });
+
+                // Only include metadata if relevant
+                if processed.truncated {
+                    response["truncated"] = json!(true);
+                }
+
+                // Critical: tell agent whether task is done and if they should wait
+                response["done"] = json!(task_done);
+                if !has_more && !task_done {
+                    // No more output right now, but task still running - DON'T poll, wait
+                    response["hint"] = json!("Task running. Wait 5-10s before checking again.");
+                }
+
+                self.ok(&response)
             }
             "kill" => {
                 let task_id = args
