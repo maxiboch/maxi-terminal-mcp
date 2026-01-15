@@ -194,17 +194,18 @@ impl McpServer {
                 },
                 {
                     "name": "task",
-                    "description": "Manage background tasks: status, output (paginated), kill, or list all.",
+                    "description": "Manage background tasks: status, output (paginated), kill, list, or wait. USE `wait` TO BLOCK UNTIL DONE - do NOT poll status/output repeatedly (rate-limited with exponential penalty delays).",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
-                            "action": { "type": "string", "enum": ["status", "output", "kill", "list"] },
-                            "task_id": { "type": "string", "description": "Required for status/output/kill" },
+                            "action": { "type": "string", "enum": ["status", "output", "kill", "list", "wait"], "description": "Use `wait` to block until task completes (recommended). Polling status/output incurs penalty delays." },
+                            "task_id": { "type": "string", "description": "Required for status/output/kill/wait" },
                             "stream": { "type": "string", "enum": ["stdout", "stderr", "both"], "default": "both" },
                             "offset": { "type": "integer", "default": 0 },
                             "limit": { "type": "integer", "default": 50000 },
                             "format": { "type": "string", "enum": ["raw", "compact", "summary"], "default": "compact" },
-                            "force": { "type": "boolean", "default": false, "description": "For kill: use SIGKILL" }
+                            "force": { "type": "boolean", "default": false, "description": "For kill: use SIGKILL" },
+                            "timeout_ms": { "type": "integer", "default": 300000, "description": "For wait: max time to wait (default 5min)" }
                         },
                         "required": ["action"]
                     }
@@ -274,26 +275,36 @@ impl McpServer {
 
         let args = params.get("arguments").cloned().unwrap_or(json!({}));
 
-        // Check rate limits for polling operations - STRICT enforcement
+        // Check rate limits for polling operations - STRICT enforcement with penalties
         let call_info = RateLimiter::make_call_info(name, &args);
         if call_info.is_poll {
             match self.rate_limiter.check(&call_info).await {
                 RateLimitResult::Allow => {}
-                RateLimitResult::Warn { message, seconds_since_last, .. } => {
-                    // Warnings ARE errors - stop polling immediately
+                RateLimitResult::Warn { message, seconds_since_last, penalty_delay_secs, .. } => {
+                    // Actually sleep the penalty - makes polling costly
+                    if penalty_delay_secs > 0 {
+                        eprintln!("[rate-limit] Applying {}s penalty delay", penalty_delay_secs);
+                        tokio::time::sleep(tokio::time::Duration::from_secs(penalty_delay_secs)).await;
+                    }
                     return Err(anyhow!(
-                        "POLLING TOO FAST ({:.1}s since last check): {} \
-                        You MUST run `sleep 10` before checking again. Do NOT poll in a loop.",
+                        "POLLING TOO FAST ({:.1}s since last): {} \
+                        This response was delayed {}s. Penalty doubles each violation (max 120s).",
                         seconds_since_last,
-                        message
+                        message,
+                        penalty_delay_secs
                     ));
                 }
-                RateLimitResult::Block { message, retry_after_ms } => {
+                RateLimitResult::Block { message, penalty_delay_secs, .. } => {
+                    // Actually sleep the penalty
+                    if penalty_delay_secs > 0 {
+                        eprintln!("[rate-limit] Applying {}s penalty delay", penalty_delay_secs);
+                        tokio::time::sleep(tokio::time::Duration::from_secs(penalty_delay_secs)).await;
+                    }
                     return Err(anyhow!(
-                        "POLLING BLOCKED: {} You MUST run `sleep {}` before retrying. \
-                        Continued polling will extend the block.",
+                        "POLLING BLOCKED: {} \
+                        This response was delayed {}s. Penalty doubles each violation (max 120s).",
                         message,
-                        retry_after_ms / 1000
+                        penalty_delay_secs
                     ));
                 }
             }
@@ -351,10 +362,20 @@ impl McpServer {
                 )
                 .await?;
 
-            // Register task for rate limiting - tracks when polling starts
-            self.rate_limiter.register_task(&task_id).await;
+                        // Get expected duration from command history for proportional rate limiting
+            let expected_ms = self.memory_client.get_cmd_estimate(command).await
+                .map(|e| e.estimate_ms)
+                .unwrap_or(10_000); // Default 10s if unknown
 
-            return self.ok(&json!({ "task_id": task_id }));
+            // Register task for rate limiting with expected duration
+            self.rate_limiter.register_task(&task_id, expected_ms).await;
+
+            let expected_secs = expected_ms / 1000;
+            return self.ok(&json!({
+                "task_id": task_id,
+                "expected_secs": expected_secs,
+                "hint": format!("Use `task` with action `wait` to block until done (~{}s). Polling incurs penalty delays proportional to runtime.", expected_secs)
+            }));
         }
 
         let _format = self.parse_format(args.get("format"));
@@ -576,6 +597,48 @@ impl McpServer {
                 let force = args.get("force").and_then(|f| f.as_bool()).unwrap_or(false);
                 let killed = self.task_manager.kill_task(task_id, force).await?;
                 self.ok(&json!({"killed": killed}))
+            }
+            "wait" => {
+                // Block until task completes - no polling needed
+                let task_id = args
+                    .get("task_id")
+                    .and_then(|t| t.as_str())
+                    .ok_or_else(|| anyhow!("Missing task_id"))?;
+                let timeout_ms = args.get("timeout_ms").and_then(|t| t.as_u64()).unwrap_or(300_000); // 5min default
+                let format = self.parse_format(args.get("format"));
+
+                let start = std::time::Instant::now();
+                let timeout = tokio::time::Duration::from_millis(timeout_ms);
+
+                // Poll internally until done (not exposed to agent)
+                loop {
+                    if start.elapsed() > timeout {
+                        return Err(anyhow!("Task wait timed out after {}ms", timeout_ms));
+                    }
+
+                    let done = self.task_manager.is_output_complete(task_id).await.unwrap_or(true);
+                    if done {
+                        break;
+                    }
+
+                    // Internal poll - 500ms interval (not rate-limited since it's internal)
+                    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                }
+
+                // Task is done - return full output
+                let task = self.task_manager.get_task(task_id).await
+                    .ok_or_else(|| anyhow!("Task not found"))?;
+                let (data, _) = self.task_manager.get_output(task_id, OutputStream::Both, 0, usize::MAX).await
+                    .ok_or_else(|| anyhow!("Task output not found"))?;
+
+                let processed = crate::output::process_output(&data, format, None);
+
+                self.ok(&json!({
+                    "status": task.status,
+                    "exit_code": task.exit_code,
+                    "duration_ms": task.duration_ms,
+                    "output": processed.as_string_lossy()
+                }))
             }
             _ => Err(anyhow!("Unknown action: {}", action)),
         }
