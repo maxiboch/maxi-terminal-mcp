@@ -13,24 +13,24 @@ use crate::process::{
     StreamingOutput,
 };
 
-// Docker-style memorable task names
+// Fruit + candy themed task names
 static TASK_COUNTER: AtomicU32 = AtomicU32::new(0);
 
-const ADJECTIVES: &[&str] = &[
-    "swift", "bold", "calm", "keen", "warm", "cool", "fast", "wise",
-    "brave", "quiet", "sharp", "bright", "quick", "steady", "eager", "gentle",
+const FRUITS: &[&str] = &[
+    "mango", "peach", "berry", "melon", "grape", "lemon", "apple", "cherry",
+    "plum", "kiwi", "fig", "pear", "lime", "guava", "papaya", "coconut",
 ];
 
-const NOUNS: &[&str] = &[
-    "fox", "owl", "wolf", "hawk", "bear", "deer", "lynx", "seal",
-    "crow", "dove", "frog", "moth", "newt", "wren", "hare", "finch",
+const CANDY: &[&str] = &[
+    "taffy", "fudge", "truffle", "toffee", "caramel", "nougat", "brittle", "sorbet",
+    "gelato", "praline", "bonbon", "mousse", "parfait", "sundae", "swirl", "twist",
 ];
 
 fn next_task_id() -> String {
     let n = TASK_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let adj = ADJECTIVES[n as usize % ADJECTIVES.len()];
-    let noun = NOUNS[(n as usize / ADJECTIVES.len()) % NOUNS.len()];
-    format!("{}_{}", adj, noun)
+    let fruit = FRUITS[n as usize % FRUITS.len()];
+    let candy = CANDY[(n as usize / FRUITS.len()) % CANDY.len()];
+    format!("{}_{}", fruit, candy)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
