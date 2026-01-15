@@ -276,8 +276,12 @@ impl McpServer {
         let args = params.get("arguments").cloned().unwrap_or(json!({}));
 
         // Check rate limits for polling operations - STRICT enforcement with penalties
+        // Exception: status calls always succeed (they return timing info agent needs)
         let call_info = RateLimiter::make_call_info(name, &args);
-        if call_info.is_poll {
+        let is_status_call = name == "task" && 
+            args.get("action").and_then(|a| a.as_str()) == Some("status");
+        
+        if call_info.is_poll && !is_status_call {
             match self.rate_limiter.check(&call_info).await {
                 RateLimitResult::Allow => {}
                 RateLimitResult::Warn { message, seconds_since_last, penalty_delay_secs, .. } => {
@@ -472,7 +476,7 @@ impl McpServer {
                     .collect();
                 self.ok(&json!(summaries))
             }
-            "status" => {
+                        "status" => {
                 let task_id = args
                     .get("task_id")
                     .and_then(|t| t.as_str())
@@ -487,17 +491,23 @@ impl McpServer {
                     .is_output_complete(task_id)
                     .await
                     .unwrap_or(true);
-                
-                // Include continuation hint - where to resume reading output
+
+                // Get timing info (always available, even when rate limited)
+                let timing = self.rate_limiter.get_task_timing(task_id).await;
                 let bytes_read = self.rate_limiter.get_bytes_returned(task_id).await;
-                
+
                 self.ok(&json!({
                     "st": task.status,
                     "exit": task.exit_code,
                     "dur": task.duration_ms,
                     "pid": task.pid,
                     "done": output_complete,
-                    "next_offset": bytes_read  // Resume output from here to avoid re-reading
+                    "next_offset": bytes_read,
+                    // Timing info - always included so agent knows how long to wait
+                    "expected_ms": timing.expected_ms,
+                    "elapsed_ms": timing.elapsed_ms,
+                    "remaining_ms": timing.remaining_ms,
+                    "wait_ms": timing.recommended_wait_ms
                 }))
             }
             "output" => {

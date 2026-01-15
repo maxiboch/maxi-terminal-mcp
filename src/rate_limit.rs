@@ -85,6 +85,30 @@ pub struct CallInfo {
     pub output_offset: Option<usize>,
 }
 
+/// Timing information for a task (always returned, even when rate limited)
+#[derive(Debug, Clone)]
+pub struct TaskTiming {
+    /// Expected duration from command history (ms)
+    pub expected_ms: u64,
+    /// Time elapsed since task started (ms)
+    pub elapsed_ms: u64,
+    /// Estimated remaining time (ms), 0 if exceeded
+    pub remaining_ms: u64,
+    /// Recommended wait before next poll (ms)
+    pub recommended_wait_ms: u64,
+}
+
+impl Default for TaskTiming {
+    fn default() -> Self {
+        Self {
+            expected_ms: 10_000,
+            elapsed_ms: 0,
+            remaining_ms: 10_000,
+            recommended_wait_ms: 5_000,
+        }
+    }
+}
+
 pub struct RateLimiter {
     config: RateLimitConfig,
     /// Map of call_key -> CallRecord
@@ -176,6 +200,27 @@ impl RateLimiter {
         let key = Self::make_task_key(task_id);
         let history = self.history.lock().await;
         history.get(&key).map(|r| r.bytes_returned).unwrap_or(0)
+    }
+
+    /// Get timing info for a task (always succeeds, returns defaults if unknown)
+    pub async fn get_task_timing(&self, task_id: &str) -> TaskTiming {
+        let key = Self::make_task_key(task_id);
+        let history = self.history.lock().await;
+        
+        if let Some(record) = history.get(&key) {
+            let elapsed_ms = record.created_at.elapsed().as_millis() as u64;
+            let expected_ms = record.expected_duration_ms;
+            let remaining_ms = expected_ms.saturating_sub(elapsed_ms);
+            
+            TaskTiming {
+                expected_ms,
+                elapsed_ms,
+                remaining_ms,
+                recommended_wait_ms: (expected_ms as f64 * 0.25).max(2000.0) as u64,
+            }
+        } else {
+            TaskTiming::default()
+        }
     }
 
     /// Check if a poll call should be allowed, warned, or blocked
