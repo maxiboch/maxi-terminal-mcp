@@ -1,7 +1,7 @@
 ﻿use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::io::{BufRead, Write};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -49,20 +49,48 @@ impl McpServer {
     }
 
     pub async fn run(&self) -> Result<()> {
-        let stdin = std::io::stdin();
-        let mut stdout = std::io::stdout();
+        let stdin = tokio::io::stdin();
+        let mut reader = BufReader::new(stdin);
+        let mut stdout = tokio::io::stdout();
 
-        for line in stdin.lock().lines() {
-            let line = line?;
+        let mut line = String::new();
+        loop {
+            match reader.read_line(&mut line).await {
+                Ok(0) => break, // EOF
+                Ok(_) => {}
+                Err(e) => {
+                    eprintln!("maxi-terminal stdin error: {}", e);
+                    break;
+                }
+            }
+
             if line.trim().is_empty() {
+                line.clear();
                 continue;
             }
 
-            let msg: Value = serde_json::from_str(&line)?;
+            let msg: Value = match serde_json::from_str(&line) {
+                Ok(v) => v,
+                Err(e) => {
+                    let err = json!({
+                        "jsonrpc": "2.0",
+                        "error": { "code": -32700, "message": format!("Parse error: {}", e) },
+                        "id": null
+                    });
+                    if let Ok(err_str) = serde_json::to_string(&err) {
+                        let _ = stdout.write_all(err_str.as_bytes()).await;
+                        let _ = stdout.write_all(b"\n").await;
+                        let _ = stdout.flush().await;
+                    }
+                    line.clear();
+                    continue;
+                }
+            };
             
             // Check if this is a response to an elicitation request we sent
             if let Some((id, result)) = ElicitationManager::is_elicitation_response(&msg) {
                 self.elicitation_manager.handle_response(id, result).await;
+                line.clear();
                 continue;
             }
 
@@ -71,12 +99,20 @@ impl McpServer {
 
             // Don't send responses for notifications (they return null)
             if response.is_null() {
+                line.clear();
                 continue;
             }
 
-            let response_str = serde_json::to_string(&response)?;
-            writeln!(stdout, "{}", response_str)?;
-            stdout.flush()?;
+            if let Ok(response_str) = serde_json::to_string(&response) {
+                if stdout.write_all(response_str.as_bytes()).await.is_err()
+                    || stdout.write_all(b"\n").await.is_err()
+                    || stdout.flush().await.is_err()
+                {
+                    eprintln!("maxi-terminal stdout error, client disconnected");
+                    break;
+                }
+            }
+            line.clear();
         }
 
         Ok(())
@@ -772,9 +808,10 @@ impl McpServer {
 
         // Send request to client via stdout
         let request_str = serde_json::to_string(&request)?;
-        let mut stdout = std::io::stdout();
-        writeln!(stdout, "{}", request_str)?;
-        stdout.flush()?;
+        let mut stdout = tokio::io::stdout();
+        stdout.write_all(request_str.as_bytes()).await?;
+        stdout.write_all(b"\n").await?;
+        stdout.flush().await?;
 
         // Wait for response (with timeout)
         let result = tokio::time::timeout(
