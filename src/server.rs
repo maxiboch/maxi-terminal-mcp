@@ -552,10 +552,10 @@ impl McpServer {
                         if let Some(estimate) = self.memory_client.get_cmd_estimate(&task.command).await {
                             estimate.as_hint()
                         } else {
-                            "STOP POLLING. Task running. Sleep ~10s then check once. Do NOT poll repeatedly.".to_string()
+                            "STOP. Run `mcp__maxi-terminal__run` with command: `sleep 10` before checking again.".to_string()
                         }
                     } else {
-                        "STOP POLLING. Task running. Sleep ~10s then check once. Do NOT poll repeatedly.".to_string()
+                        "STOP. Run `mcp__maxi-terminal__run` with command: `sleep 10` before checking again.".to_string()
                     };
                     response["hint"] = json!(hint);
                 }

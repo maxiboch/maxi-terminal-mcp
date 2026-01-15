@@ -185,10 +185,20 @@ pub struct CmdEstimate {
 impl CmdEstimate {
     /// Format as a hint string for the agent
     pub fn as_hint(&self) -> String {
-        if self.samples > 0 {
-            format!("STOP POLLING. Task running. Sleep for {} then check once. Do NOT poll in a loop.", self.hint)
-        } else {
-            "STOP POLLING. Task running. Sleep for ~10s then check once. Do NOT poll repeatedly.".to_string()
+        let sleep_secs = (self.estimate_ms / 1000).max(5);
+        format!(
+            "STOP. Run `mcp__maxi-terminal__run` with command: `sleep {}` before checking again.",
+            sleep_secs
+        )
+    }
+}
+
+impl Default for CmdEstimate {
+    fn default() -> Self {
+        Self {
+            estimate_ms: 10000,
+            hint: "~10s".to_string(),
+            samples: 0,
         }
     }
 }
