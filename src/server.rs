@@ -7,6 +7,7 @@ use tokio::sync::Mutex;
 
 use crate::cache::OutputCache;
 use crate::elicitation::{ClientCapabilities, ElicitAction, ElicitationManager, RequestSchema, schemas};
+use crate::memory_client::MemoryClient;
 use crate::output::{OutputFormat, DEFAULT_MAX_BYTES};
 use crate::path_utils::normalize_path;
 use crate::file_ops::{try_intercept, InterceptResult};
@@ -28,6 +29,7 @@ pub struct McpServer {
     client_capabilities: Arc<Mutex<ClientCapabilities>>,
     elicitation_manager: Arc<ElicitationManager>,
     rate_limiter: RateLimiter,
+    memory_client: Arc<MemoryClient>,
 }
 
 impl Default for McpServer {
@@ -45,6 +47,7 @@ impl McpServer {
             client_capabilities: Arc::new(Mutex::new(ClientCapabilities::default())),
             elicitation_manager: Arc::new(ElicitationManager::new()),
             rate_limiter: RateLimiter::new(RateLimitConfig::default()),
+            memory_client: Arc::new(MemoryClient::new()),
         }
     }
 
@@ -392,6 +395,9 @@ impl McpServer {
 
         let duration_ms = started.elapsed().as_millis() as u64;
 
+        // Record to maxi-memory for duration tracking
+        self.record_task_completion(command, duration_ms);
+
         let output_id = self
             .output_cache
             .store(
@@ -541,8 +547,17 @@ impl McpServer {
                 // Critical: tell agent whether task is done and if they should wait
                 response["done"] = json!(task_done);
                 if !has_more && !task_done {
-                    // No more output right now, but task still running - DON'T poll, wait
-                    response["hint"] = json!("Task running. Wait 5-10s before checking again.");
+                    // Get smart estimate based on command history
+                    let hint = if let Some(task) = self.task_manager.get_task(task_id).await {
+                        if let Some(estimate) = self.memory_client.get_cmd_estimate(&task.command).await {
+                            estimate.as_hint()
+                        } else {
+                            "Task running. Wait ~5s before checking again.".to_string()
+                        }
+                    } else {
+                        "Task running. Wait ~5s before checking again.".to_string()
+                    };
+                    response["hint"] = json!(hint);
                 }
 
                 self.ok(&response)
@@ -878,6 +893,16 @@ impl McpServer {
             Some("summary") => OutputFormat::Summary,
             _ => OutputFormat::Compact,
         }
+    }
+
+    /// Record command completion to maxi-memory for duration tracking.
+    /// Fire-and-forget: spawns a background task so it doesn't block response.
+    fn record_task_completion(&self, command: &str, duration_ms: u64) {
+        let client = Arc::clone(&self.memory_client);
+        let cmd = command.to_string();
+        tokio::spawn(async move {
+            client.record_cmd_duration(&cmd, duration_ms).await;
+        });
     }
 
     fn ok(&self, data: &Value) -> Result<Value> {

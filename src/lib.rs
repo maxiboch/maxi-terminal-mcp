@@ -1,6 +1,7 @@
 pub mod cache;
 pub mod elicitation;
 pub mod interact;
+pub mod memory_client;
 pub mod output;
 pub mod parser;
 pub mod path_utils;
