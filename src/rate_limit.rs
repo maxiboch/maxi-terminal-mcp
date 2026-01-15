@@ -25,11 +25,11 @@ pub struct RateLimitConfig {
 impl Default for RateLimitConfig {
     fn default() -> Self {
         Self {
-            initial_wait: Duration::from_secs(2),
-            poll_cooldown: Duration::from_secs(2),
-            block_cooldown: Duration::from_millis(500),
-            max_warnings: 3,
-            history_ttl: Duration::from_secs(300), // 5 minutes
+            initial_wait: Duration::from_secs(5),      // Wait 5s after spawn
+            poll_cooldown: Duration::from_secs(10),    // 10s between polls
+            block_cooldown: Duration::from_secs(3),    // Block if <3s between polls
+            max_warnings: 1,                            // Block after 1 warning
+            history_ttl: Duration::from_secs(300),     // 5 minutes
         }
     }
 }

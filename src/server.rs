@@ -274,20 +274,26 @@ impl McpServer {
 
         let args = params.get("arguments").cloned().unwrap_or(json!({}));
 
-        // Check rate limits for polling operations
+        // Check rate limits for polling operations - STRICT enforcement
         let call_info = RateLimiter::make_call_info(name, &args);
         if call_info.is_poll {
             match self.rate_limiter.check(&call_info).await {
                 RateLimitResult::Allow => {}
-                RateLimitResult::Warn { message, .. } => {
-                    // Log warning but allow the call to proceed
-                    eprintln!("[rate-limit] {}", message);
+                RateLimitResult::Warn { message, seconds_since_last, .. } => {
+                    // Warnings ARE errors - stop polling immediately
+                    return Err(anyhow!(
+                        "POLLING TOO FAST ({:.1}s since last check): {} \
+                        You MUST run `sleep 10` before checking again. Do NOT poll in a loop.",
+                        seconds_since_last,
+                        message
+                    ));
                 }
                 RateLimitResult::Block { message, retry_after_ms } => {
                     return Err(anyhow!(
-                        "POLLING BLOCKED: {} Retry after {}ms.",
+                        "POLLING BLOCKED: {} You MUST run `sleep {}` before retrying. \
+                        Continued polling will extend the block.",
                         message,
-                        retry_after_ms
+                        retry_after_ms / 1000
                     ));
                 }
             }
