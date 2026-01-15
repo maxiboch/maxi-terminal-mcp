@@ -520,7 +520,8 @@ impl McpServer {
                     .unwrap_or(DEFAULT_MAX_BYTES as u64) as usize;
                 let format = self.parse_format(args.get("format"));
 
-                if task_id.starts_with("out_") {
+                // Check if this is a cached output (o1, o2...) vs a task (swift_fox, bold_owl...)
+                if task_id.starts_with("o") && task_id.chars().nth(1).map(|c| c.is_ascii_digit()).unwrap_or(false) {
                     let cache_stream = match args.get("stream").and_then(|s| s.as_str()) {
                         Some("stdout") => Some(crate::cache::OutputStream::Stdout),
                         Some("stderr") => Some(crate::cache::OutputStream::Stderr),

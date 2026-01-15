@@ -1,7 +1,13 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Instant;
 use tokio::sync::RwLock;
+
+static OUTPUT_COUNTER: AtomicU32 = AtomicU32::new(1);
+fn next_output_id() -> String {
+    format!("o{}", OUTPUT_COUNTER.fetch_add(1, Ordering::Relaxed))
+}
 
 /// Cached output from a foreground command
 #[derive(Debug, Clone)]
@@ -67,7 +73,7 @@ impl OutputCache {
 
     /// Store output and return the output_id
     pub async fn store(&self, stdout: Vec<u8>, stderr: Vec<u8>, exit_code: Option<i32>) -> String {
-        let output_id = format!("out_{}", uuid::Uuid::new_v4().to_string().split('-').next().unwrap_or("0"));
+        let output_id = next_output_id();
         let cached = CachedOutput::new(stdout, stderr, exit_code);
 
         let mut entries = self.entries.write().await;
@@ -150,7 +156,7 @@ mod tests {
         let cache = OutputCache::new(10, 60);
         let output_id = cache.store(b"hello".to_vec(), b"error".to_vec(), Some(0)).await;
 
-        assert!(output_id.starts_with("out_"));
+        assert!(output_id.starts_with("o")); // Short IDs: o1, o2, etc.
 
         let cached = cache.get(&output_id).await.expect("should exist");
         assert_eq!(cached.stdout, b"hello");

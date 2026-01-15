@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Instant;
 use tokio::sync::RwLock;
 use tokio::time::{timeout, Duration};
@@ -11,6 +12,26 @@ use crate::process::{
     graceful_kill, kill_process_tree, register_pid, spawn_isolated, unregister_pid, SpawnConfig,
     StreamingOutput,
 };
+
+// Docker-style memorable task names
+static TASK_COUNTER: AtomicU32 = AtomicU32::new(0);
+
+const ADJECTIVES: &[&str] = &[
+    "swift", "bold", "calm", "keen", "warm", "cool", "fast", "wise",
+    "brave", "quiet", "sharp", "bright", "quick", "steady", "eager", "gentle",
+];
+
+const NOUNS: &[&str] = &[
+    "fox", "owl", "wolf", "hawk", "bear", "deer", "lynx", "seal",
+    "crow", "dove", "frog", "moth", "newt", "wren", "hare", "finch",
+];
+
+fn next_task_id() -> String {
+    let n = TASK_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let adj = ADJECTIVES[n as usize % ADJECTIVES.len()];
+    let noun = NOUNS[(n as usize / ADJECTIVES.len()) % NOUNS.len()];
+    format!("{}_{}", adj, noun)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -100,7 +121,7 @@ impl TaskManager {
         cwd: Option<PathBuf>,
         env: Option<HashMap<String, String>>,
     ) -> Result<String> {
-        let task_id = uuid::Uuid::new_v4().to_string();
+        let task_id = next_task_id();
         let mut info = TaskInfo::new(task_id.clone(), command.clone());
 
         let config = SpawnConfig {

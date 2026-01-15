@@ -3,9 +3,16 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Instant;
 
 use tokio::sync::RwLock;
+
+// Short session IDs (s1, s2, s3...)
+static SESSION_COUNTER: AtomicU32 = AtomicU32::new(1);
+fn next_session_id() -> String {
+    format!("s{}", SESSION_COUNTER.fetch_add(1, Ordering::Relaxed))
+}
 use tokio::time::{timeout, Duration};
 
 use crate::output::{process_output, OutputBuffer, OutputFormat};
@@ -67,7 +74,7 @@ impl SessionManager {
             cwd.unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")));
         let env_vars = env.unwrap_or_default();
 
-        let session_id = uuid::Uuid::new_v4().to_string();
+        let session_id = next_session_id();
 
         let info = SessionInfo {
             id: session_id.clone(),
